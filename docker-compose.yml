@@ -23,7 +23,8 @@ services:
       - TZ=Asia/Shanghai
     volumes:
       - ./data:/app/data
+      - ./workflows:/app/workflows:ro
     extra_hosts:
-      - "host.docker.internal:host-gateway"   # 访问宿主机上的 Ollama / SD WebUI
+      - "host.docker.internal:host-gateway"   # 访问宿主机上的 Qwen(8080) / ComfyUI(8188)
     depends_on:
       - napcat

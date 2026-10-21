@@ -1,5 +1,7 @@
 import asyncio
+import json
 from collections import defaultdict, deque
+from pathlib import Path
 
 from nonebot import get_driver, get_plugin_config, logger, on_command, on_message
 from nonebot.adapters.onebot.v11 import (
@@ -14,14 +16,15 @@ from nonebot.plugin import PluginMetadata
 from nonebot.rule import to_me
 
 from .config import Config
-from .llm import chat_completion, generate_image
+from .llm import chat_completion, comfyui_generate, generate_image
 from .quota import QuotaStore
 
 HELP = (
     "用法：\n"
     "@我 + 内容：用本地模型聊天（不限次数）\n"
     "/flash 内容：用 DeepSeek V4.1 Flash 回答（每人每天限次）\n"
-    "/画 描述：生成图片\n"
+    "/画 描述：用默认工作流生图\n"
+    "/画 工作流名 描述：用指定工作流（如 /画 h3 一只猫）\n"
     "/额度：查看今天剩余次数\n"
     "/重置：清空你和我的对话记录"
 )
@@ -43,6 +46,30 @@ histories: dict[str, deque] = defaultdict(lambda: deque(maxlen=cfg.history_turns
 
 KIND_FLASH = "flash"
 KIND_IMAGE = "image"
+VIDEO_EXTS = {".mp4", ".webm", ".mov", ".mkv"}
+
+
+def list_workflows() -> list[str]:
+    d = Path(cfg.comfyui_workflow_dir)
+    return sorted(p.stem for p in d.glob("*.json")) if d.is_dir() else []
+
+
+def parse_draw(text: str) -> tuple[str, str]:
+    """拆出 (工作流名, 描述)；第一个词是已有工作流名时才当作工作流名。"""
+    if cfg.image_backend != "comfyui":
+        return "", text
+    first, _, rest = text.partition(" ")
+    if first in list_workflows() and rest.strip():
+        return first, rest.strip()
+    return cfg.image_default_workflow, text
+
+
+def image_kind(workflow: str) -> str:
+    return f"{KIND_IMAGE}:{workflow}" if workflow else KIND_IMAGE
+
+
+def image_limit(workflow: str) -> int:
+    return cfg.image_limits.get(workflow, cfg.image_daily_limit)
 
 
 def session_key(event: MessageEvent) -> str:
@@ -118,31 +145,48 @@ async def _(matcher: Matcher, event: MessageEvent, arg: Message = CommandArg()):
 
 @draw_cmd.handle()
 async def _(matcher: Matcher, event: MessageEvent, arg: Message = CommandArg()):
-    prompt = arg.extract_plain_text().strip()
-    if not prompt:
-        await reply(matcher, event, "用法：/画 一只在月球上喝奶茶的猫")
+    text = arg.extract_plain_text().strip()
+    available = list_workflows()
+    if not text:
+        tip = f"\n可用工作流：{'、'.join(available)}" if available else ""
+        await reply(matcher, event, "用法：/画 一只在月球上喝奶茶的猫" + tip)
+    workflow, prompt = parse_draw(text)
+    if workflow and workflow not in available:
+        await reply(matcher, event, f"没有找到工作流 {workflow}，可用：{'、'.join(available) or '无'}")
     user = str(event.user_id)
-    limit = 0 if is_superuser(event) else cfg.image_daily_limit
-    if not quota.try_consume(user, KIND_IMAGE, limit):
-        await reply(matcher, event, f"你今天的 {cfg.image_daily_limit} 次生图已用完")
-    await matcher.send("收到，正在画…")
+    kind = image_kind(workflow)
+    limit = 0 if is_superuser(event) else image_limit(workflow)
+    if not quota.try_consume(user, kind, limit):
+        await reply(matcher, event, f"你今天的 {workflow or '生图'} 次数（{limit} 次）已用完")
+    await matcher.send(f"收到，正在用 {workflow} 生成…" if workflow else "收到，正在画…")
     try:
         async with local_gpu:
-            image = await generate_image(
-                cfg.image_backend,
-                cfg.image_base_url,
-                cfg.image_api_key,
-                cfg.image_model,
-                prompt,
-                cfg.image_size,
-                cfg.image_steps,
-                cfg.request_timeout,
-            )
+            if cfg.image_backend == "comfyui":
+                path = Path(cfg.comfyui_workflow_dir) / f"{workflow}.json"
+                data, filename = await comfyui_generate(
+                    cfg.image_base_url,
+                    json.loads(path.read_text("utf-8")),
+                    prompt,
+                    cfg.image_timeout,
+                )
+            else:
+                data, filename = await generate_image(
+                    cfg.image_backend,
+                    cfg.image_base_url,
+                    cfg.image_api_key,
+                    cfg.image_model,
+                    prompt,
+                    cfg.image_size,
+                    cfg.image_steps,
+                    cfg.image_timeout,
+                )
     except Exception as e:
-        quota.refund(user, KIND_IMAGE)
+        quota.refund(user, kind)
         logger.exception("生图失败")
-        await reply(matcher, event, f"生图失败：{type(e).__name__}")
-    await reply(matcher, event, MessageSegment.image(image))
+        await reply(matcher, event, f"生成失败（已退回次数）：{str(e) or type(e).__name__}")
+    if Path(filename).suffix.lower() in VIDEO_EXTS:
+        await matcher.finish(MessageSegment.video(data))
+    await reply(matcher, event, MessageSegment.image(data))
 
 
 @quota_cmd.handle()
@@ -151,9 +195,15 @@ async def _(matcher: Matcher, event: MessageEvent):
         await reply(matcher, event, "你是管理员，不限次数")
     user = str(event.user_id)
     lines = [f"Flash：今日剩余 {max(cfg.flash_daily_limit - quota.used(user, KIND_FLASH), 0)}/{cfg.flash_daily_limit} 次"]
-    if cfg.image_daily_limit > 0:
-        used = quota.used(user, KIND_IMAGE)
-        lines.append(f"生图：今日剩余 {max(cfg.image_daily_limit - used, 0)}/{cfg.image_daily_limit} 次")
+    workflows = list_workflows() if cfg.image_backend == "comfyui" else [""]
+    for wf in workflows:
+        limit = image_limit(wf)
+        name = wf or "生图"
+        if limit > 0:
+            left = max(limit - quota.used(user, image_kind(wf)), 0)
+            lines.append(f"{name}：今日剩余 {left}/{limit} 次")
+        else:
+            lines.append(f"{name}：不限次数")
     lines.append("本地模型聊天：不限次数")
     await reply(matcher, event, "\n".join(lines))
 

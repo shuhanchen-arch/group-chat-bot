@@ -83,13 +83,47 @@ async def test_flash_failure_refunds(env, monkeypatch):
     assert aichat.quota.used("1", "flash") == 0
 
 
-async def test_draw(env, monkeypatch):
+async def test_draw_workflows(env, monkeypatch, tmp_path):
     bot, sent, _ = env
+    wf_dir = tmp_path / "workflows"
+    wf_dir.mkdir()
+    (wf_dir / "flux.json").write_text("{}")
+    (wf_dir / "h3.json").write_text("{}")
+    monkeypatch.setattr(aichat.cfg, "comfyui_workflow_dir", str(wf_dir))
+    monkeypatch.setattr(aichat.cfg, "image_default_workflow", "flux")
+    monkeypatch.setattr(aichat.cfg, "image_limits", {"h3": 1})
+    used = []
 
-    async def fake_image(*a, **k):
-        return b"\x89PNG"
+    async def fake_comfy(base_url, workflow, prompt, timeout):
+        used.append(prompt)
+        return (b"VID", "out.mp4") if prompt == "跳舞的猫" else (b"PNG", "out.png")
 
-    monkeypatch.setattr(aichat, "generate_image", fake_image)
+    monkeypatch.setattr(aichat, "comfyui_generate", fake_comfy)
     await handle_event(bot, group_msg("/画 一只猫"))
-    assert "正在画" in sent[0]
-    assert "CQ:image" in sent[-1]
+    assert "flux" in sent[-2] and "CQ:image" in sent[-1]
+    await handle_event(bot, group_msg("/画 h3 跳舞的猫"))
+    assert "h3" in sent[-2] and "CQ:video" in sent[-1]
+    assert used == ["一只猫", "跳舞的猫"]
+    # h3 每天 1 次
+    await handle_event(bot, group_msg("/画 h3 再来"))
+    assert "已用完" in sent[-1] and len(used) == 2
+    # flux 不限
+    await handle_event(bot, group_msg("/画 h3"))  # 只有工作流名没有描述，当作描述交给默认工作流
+    assert used[-1] == "h3"
+    await handle_event(bot, group_msg("/额度"))
+    assert "h3：今日剩余 0/1 次" in sent[-1] and "flux：不限次数" in sent[-1]
+
+
+async def test_draw_failure_refunds(env, monkeypatch, tmp_path):
+    bot, sent, _ = env
+    (tmp_path / "flux.json").write_text("{}")
+    monkeypatch.setattr(aichat.cfg, "comfyui_workflow_dir", str(tmp_path))
+    monkeypatch.setattr(aichat.cfg, "image_limits", {"flux": 2})
+
+    async def boom(*a, **k):
+        raise aichat.llm.ApiError("ComfyUI 生成超时")
+
+    monkeypatch.setattr(aichat, "comfyui_generate", boom)
+    await handle_event(bot, group_msg("/画 一只猫"))
+    assert "ComfyUI 生成超时" in sent[-1]
+    assert aichat.quota.used("1", "image:flux") == 0

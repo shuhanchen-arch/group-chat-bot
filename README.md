@@ -4,61 +4,73 @@ QQ 群 AI 机器人：**NapCat**（登录 QQ 小号）+ **NoneBot2**（机器人
 
 | 功能 | 触发方式 | 用的模型 | 限制 |
 |---|---|---|---|
-| 日常聊天 | `@机器人 内容` | 本地模型（Ollama 等） | 不限次数 |
+| 日常聊天 | `@机器人 内容` | 本地 Qwen 27B（:8080） | 不限次数 |
 | 高质量回答 | `/flash 内容`（或 `/f`） | DeepSeek V4.1 Flash | 每人每天 10 次（失败自动退回） |
-| 生图 | `/画 描述`（或 `/draw`） | 本地 SD WebUI / Forge，或任意 OpenAI 兼容生图接口 | 默认不限，可配置 |
+| 生图 | `/画 描述`（默认工作流，如 Flux 3） | 本地 ComfyUI（:8188） | 默认不限，可按工作流设上限 |
+| 指定工作流 | `/画 h3 描述` | ComfyUI 里的其他工作流 | 同上 |
 | 查额度 | `/额度` | — | — |
 | 清空上下文 | `/重置` | — | — |
 
 - 次数按北京时间每天 0 点重置，存在 `data/quota.db`，重启不丢。
 - `SUPERUSERS` 里的 QQ 号（你的大号）不受次数限制。
 - 每个人在每个群里有独立的对话上下文（默认保留 6 轮）。
-- 本地显卡同一时间只跑一个任务（聊天和生图排队），避免爆显存。
+- 本地显卡同一时间只跑一个任务（Qwen 聊天和 ComfyUI 生图排队），避免爆显存。
+- 工作流输出视频（mp4/webm）时会以视频消息发送。
 
 ## 架构
 
 ```
 QQ 小号 ── NapCat (Docker) ──反向 WebSocket (OneBot 11)──▶ NoneBot2 bot (Docker)
-                                                              ├─▶ Ollama（宿主机，本地聊天模型）
-                                                              ├─▶ SD WebUI / Forge（宿主机，本地生图）
+                                                              ├─▶ Qwen 27B（宿主机 :8080，本地聊天）
+                                                              ├─▶ ComfyUI（宿主机 :8188，Flux 3 / H3 工作流）
                                                               └─▶ DeepSeek API（Flash，限次）
 ```
 
 ## 部署
 
-前提：机器上已装好 Docker；Ollama 和（可选的）SD WebUI 直接装在宿主机上。
+前提：机器上已装好 Docker；Qwen 和 ComfyUI 继续直接跑在宿主机上。
 
-**1. 准备本地模型**
+**1. 让容器能访问宿主机上的服务**
+
+机器人跑在 Docker 里，宿主机服务如果只监听 `127.0.0.1`，容器是访问不到的：
+- Qwen（:8080）：llama.cpp 启动加 `--host 0.0.0.0`；vLLM 加 `--host 0.0.0.0`。
+- ComfyUI（:8188）：启动加 `--listen 0.0.0.0`。
+
+可以在宿主机上先确认接口正常：
 
 ```bash
-ollama pull qwen3:8b        # 按显存选：8G 显存 qwen3:8b，16G+ 可以试 qwen3:14b
+curl http://127.0.0.1:8080/v1/models        # 能列出模型即可，顺便看清模型名
 ```
 
-Ollama 默认只监听 127.0.0.1，容器访问不到，需要设置 `OLLAMA_HOST=0.0.0.0` 后重启 Ollama。
-SD WebUI / Forge 启动参数要加 `--api --listen`。
+**2. 导出 ComfyUI 工作流**
 
-**2. 配置**
+按 [workflows/README.md](workflows/README.md) 把 Flux 3 和 H3 的工作流导出成 API 格式，
+保存为 `workflows/flux.json`、`workflows/h3.json`，并把提示词改成 `{{prompt}}`。
+
+**3. 配置**
 
 ```bash
 cp .env.example .env
 ```
 
-至少修改：`ONEBOT_ACCESS_TOKEN`、`SUPERUSERS`、`FLASH_API_KEY`（在 platform.deepseek.com 申请）、`LOCAL_MODEL`。
+至少修改：`ONEBOT_ACCESS_TOKEN`、`SUPERUSERS`、`FLASH_API_KEY`（在 platform.deepseek.com 申请）。如果 Qwen 用的是 vLLM / Ollama，`LOCAL_MODEL` 要填上一步查到的模型名。
+
+机器人监听 8090 端口（8080 已被 Qwen 占用），只在 Docker 内网使用，不对外暴露。
 
 > DeepSeek V4.1 Flash 的模型名目前报道不一（`deepseek-flash` / `deepseek-v4.1-flash`），以 DeepSeek 官方文档为准填 `FLASH_MODEL`。
 
-**3. 启动**
+**4. 启动**
 
 ```bash
 docker compose up -d --build
 ```
 
-**4. 登录小号并连接机器人**
+**5. 登录小号并连接机器人**
 
 1. 浏览器打开 `http://<机器IP>:6099/webui`（compose 里默认只绑定本机，远程访问可用 SSH 端口转发）。登录 token 见 `docker compose logs napcat`。
 2. 扫码登录 QQ 小号。
 3. 在「网络配置」中新建 **WebSocket 客户端**（反向 WS）：
-   - URL：`ws://bot:8080/onebot/v11/ws`
+   - URL：`ws://bot:8090/onebot/v11/ws`
    - Token：与 `.env` 里的 `ONEBOT_ACCESS_TOKEN` 相同
    - 消息格式：`array`
 4. `docker compose logs -f bot` 看到 `OneBot V11 | Bot xxx connected` 即成功。
