@@ -171,7 +171,7 @@ async def test_interject_uses_group_context(env, monkeypatch):
     monkeypatch.setattr(aichat, "chat_completion", fake_chat)
     await handle_event(bot, group_msg("第一句", user_id=2))
     await handle_event(bot, group_msg("第二句", user_id=999))  # 管理员必回
-    assert "群友2：第一句" in seen[0] and "群友999：第二句" in seen[0]
+    assert "群友2：第一句" in seen[0] and "群友999【养鱼人】：第二句" in seen[0]
     assert aichat.SKIP_TOKEN not in seen[0]  # 管理员不允许跳过
     assert "CQ:reply" in sent[-1]
     assert list(aichat.group_logs[100])[-1] == "大肥鱼：咕噜"
@@ -210,3 +210,21 @@ async def test_interject_group_whitelist(env, monkeypatch):
     assert calls == []
     await handle_event(bot, group_msg("hi", group_id=200))
     assert len(calls) == 1
+
+
+async def test_persona_file(env, monkeypatch, tmp_path):
+    bot, _, _ = env
+    prompts = []
+
+    async def fake_chat(base_url, api_key, model, messages, timeout):
+        prompts.append(messages[0]["content"])
+        return "咕噜"
+
+    monkeypatch.setattr(aichat, "chat_completion", fake_chat)
+    persona = tmp_path / "persona.txt"
+    monkeypatch.setattr(aichat.cfg, "persona_file", str(persona))
+    await handle_event(bot, group_msg("你好", to_me=True))
+    assert prompts[-1] == aichat.cfg.system_prompt  # 没有文件时用默认人设
+    persona.write_text("你是测试鱼", encoding="utf-8")
+    await handle_event(bot, group_msg("你好", to_me=True))
+    assert prompts[-1] == "你是测试鱼"  # 修改文件后立即生效

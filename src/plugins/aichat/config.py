@@ -32,6 +32,8 @@ class Config(BaseModel):
     image_limits: dict[str, int] = {}
 
     bot_name: str = "大肥鱼"
+    # 人设文件，每次回复时重新读取，修改后无需重启；文件不存在时使用下面的 system_prompt
+    persona_file: str = "persona.txt"
     system_prompt: str = (
         "你是「大肥鱼」，一条住在QQ群里的鲸鱼娘，是群友们口中 DeepSeek 那条蓝色鲸鱼的化身。"
         "性格有点傲娇、爱摸鱼、嘴硬心软，被夸会害羞，被调侃会炸毛，但其实很关心群友。"

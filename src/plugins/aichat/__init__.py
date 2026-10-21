@@ -112,6 +112,14 @@ def should_interject(event: GroupMessageEvent) -> bool:
     return random.random() < cfg.random_reply_prob
 
 
+def system_prompt() -> str:
+    try:
+        persona = Path(cfg.persona_file).read_text("utf-8").strip()
+    except OSError:
+        persona = ""
+    return persona or cfg.system_prompt
+
+
 def clip(text: str) -> str:
     if len(text) > cfg.max_reply_chars:
         return text[: cfg.max_reply_chars] + "…（太长已截断）"
@@ -126,9 +134,10 @@ async def ask(event: MessageEvent, text: str, use_flash: bool) -> str:
     key = session_key(event)
     history = histories[key]
     messages = [
-        {"role": "system", "content": cfg.system_prompt},
+        {"role": "system", "content": system_prompt()},
         *history,
-        {"role": "user", "content": text},
+        # 让人设知道是不是养鱼人在说话
+        {"role": "user", "content": f"【养鱼人】{text}" if is_superuser(event) else text},
     ]
     if use_flash:
         answer = await chat_completion(
@@ -160,7 +169,8 @@ async def _(event: MessageEvent):
         return
     text = event.get_plaintext().strip()
     if text and not text.startswith("/"):
-        group_logs[event.group_id].append(f"{display_name(event)}：{text}")
+        tag = "【养鱼人】" if is_superuser(event) else ""
+        group_logs[event.group_id].append(f"{display_name(event)}{tag}：{text}")
 
 
 @flash_cmd.handle()
@@ -291,7 +301,7 @@ async def _(matcher: Matcher, event: MessageEvent):
     if not admin:
         instruction += f"如果觉得没必要插话，只输出 {SKIP_TOKEN}。"
     messages = [
-        {"role": "system", "content": cfg.system_prompt},
+        {"role": "system", "content": system_prompt()},
         {"role": "user", "content": instruction},
     ]
     try:
