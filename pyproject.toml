@@ -3,6 +3,7 @@ name = "group-chat-bot"
 version = "0.1.0"
 description = "QQ 群 AI 机器人：NapCat + NoneBot2，本地模型 + DeepSeek V4.1 Flash 限额 + 生图"
 requires-python = ">=3.10"
+authors = [{ name = "shuhanchen-arch", email = "shuhan.chen17@gmail.com" }]
 dependencies = [
     "nonebot2[fastapi]>=2.4",
     "nonebot-adapter-onebot>=2.4",

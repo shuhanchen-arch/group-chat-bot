@@ -93,3 +93,7 @@ pytest
 ```
 
 配置项都在 `src/plugins/aichat/config.py`，对应 `.env` 中的同名大写变量。
+
+## 贡献者
+
+- [@shuhanchen-arch](https://github.com/shuhanchen-arch)
