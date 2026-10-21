@@ -31,16 +31,23 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(aichat, "quota", aichat.QuotaStore(str(tmp_path / "q.db")))
     monkeypatch.setattr(aichat.cfg, "flash_api_key", "k")
     aichat.histories.clear()
+    aichat.group_logs.clear()
+    aichat.last_random_reply.clear()
+    # 默认不随机插话，单独的测试里再打开
+    monkeypatch.setattr(aichat.cfg, "random_reply_prob", 0.0)
     adapter = nonebot.get_adapter(Adapter)
     return Bot(adapter, BOT_ID), sent, calls
 
 
-def group_msg(text: str, user_id: int = 1, to_me: bool = False) -> GroupMessageEvent:
+def group_msg(
+    text: str, user_id: int = 1, to_me: bool = False, role: str = "member", group_id: int = 100
+) -> GroupMessageEvent:
     return GroupMessageEvent(
         time=int(time.time()), self_id=int(BOT_ID), post_type="message",
         sub_type="normal", user_id=user_id, message_type="group", message_id=42,
         message=Message(text), original_message=Message(text), raw_message=text,
-        font=0, sender=Sender(user_id=user_id), to_me=to_me, group_id=100,
+        font=0, sender=Sender(user_id=user_id, nickname=f"群友{user_id}", role=role),
+        to_me=to_me, group_id=group_id,
     )
 
 
@@ -127,3 +134,79 @@ async def test_draw_failure_refunds(env, monkeypatch, tmp_path):
     await handle_event(bot, group_msg("/画 一只猫"))
     assert "ComfyUI 生成超时" in sent[-1]
     assert aichat.quota.used("1", "image:flux") == 0
+
+
+async def test_interject_random(env, monkeypatch):
+    bot, sent, calls = env
+
+    async def fake_chat(base_url, api_key, model, messages, timeout):
+        calls.append(model)
+        return "咕噜"
+
+    monkeypatch.setattr(aichat, "chat_completion", fake_chat)
+    monkeypatch.setattr(aichat.cfg, "random_reply_prob", 0.5)
+    monkeypatch.setattr(aichat.random, "random", lambda: 0.9)
+    await handle_event(bot, group_msg("今天好累"))
+    assert calls == [] and sent == []
+    monkeypatch.setattr(aichat.random, "random", lambda: 0.1)
+    await handle_event(bot, group_msg("想摸鱼"))
+    assert len(calls) == 1 and len(sent) == 1
+    assert "CQ:reply" not in sent[0]  # 随机插话不引用原消息
+    # 冷却中不再插话
+    await handle_event(bot, group_msg("还在吗"))
+    assert len(calls) == 1
+    # 另一个群不受冷却影响
+    await handle_event(bot, group_msg("hello", group_id=200))
+    assert len(calls) == 2
+
+
+async def test_interject_uses_group_context(env, monkeypatch):
+    bot, sent, _ = env
+    seen = []
+
+    async def fake_chat(base_url, api_key, model, messages, timeout):
+        seen.append(messages[-1]["content"])
+        return "咕噜"
+
+    monkeypatch.setattr(aichat, "chat_completion", fake_chat)
+    await handle_event(bot, group_msg("第一句", user_id=2))
+    await handle_event(bot, group_msg("第二句", user_id=999))  # 管理员必回
+    assert "群友2：第一句" in seen[0] and "群友999：第二句" in seen[0]
+    assert aichat.SKIP_TOKEN not in seen[0]  # 管理员不允许跳过
+    assert "CQ:reply" in sent[-1]
+    assert list(aichat.group_logs[100])[-1] == "大肥鱼：咕噜"
+
+
+async def test_admin_always_replied(env, monkeypatch):
+    bot, _, calls = env
+    for i in range(3):
+        await handle_event(bot, group_msg(f"管理员消息{i}", user_id=999))
+    assert len(calls) == 3
+    # 群管理员默认不算，打开选项后必回
+    await handle_event(bot, group_msg("群管消息", user_id=5, role="admin"))
+    assert len(calls) == 3
+    monkeypatch.setattr(aichat.cfg, "always_reply_group_admins", True)
+    await handle_event(bot, group_msg("群管消息", user_id=5, role="admin"))
+    assert len(calls) == 4
+
+
+async def test_interject_skip(env, monkeypatch):
+    bot, sent, _ = env
+    monkeypatch.setattr(aichat.cfg, "random_reply_prob", 1.0)
+
+    async def fake_chat(*a, **k):
+        return "[跳过]"
+
+    monkeypatch.setattr(aichat, "chat_completion", fake_chat)
+    await handle_event(bot, group_msg("嗯嗯"))
+    assert sent == []
+
+
+async def test_interject_group_whitelist(env, monkeypatch):
+    bot, _, calls = env
+    monkeypatch.setattr(aichat.cfg, "random_reply_prob", 1.0)
+    monkeypatch.setattr(aichat.cfg, "random_reply_groups", [200])
+    await handle_event(bot, group_msg("hi", group_id=100))
+    assert calls == []
+    await handle_event(bot, group_msg("hi", group_id=200))
+    assert len(calls) == 1

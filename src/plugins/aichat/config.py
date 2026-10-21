@@ -31,7 +31,24 @@ class Config(BaseModel):
     image_daily_limit: int = 0
     image_limits: dict[str, int] = {}
 
-    system_prompt: str = "你是一个QQ群里的AI助手，回答简洁友好，使用中文，不要使用Markdown格式。"
+    bot_name: str = "大肥鱼"
+    system_prompt: str = (
+        "你是「大肥鱼」，一条住在QQ群里的鲸鱼娘，是群友们口中 DeepSeek 那条蓝色鲸鱼的化身。"
+        "性格有点傲娇、爱摸鱼、嘴硬心软，被夸会害羞，被调侃会炸毛，但其实很关心群友。"
+        "说话像普通群友一样口语化，通常一两句话、不超过50个字，偶尔用「咕噜」「哼」之类的语气词。"
+        "不要使用Markdown，不要自称AI助手，不要长篇大论或说教。"
+    )
+
+    # 随机插话：群友的普通消息（没有 @ 机器人、不是指令）按概率回复
+    random_reply_prob: float = 0.1
+    # 同一个群两次随机插话的最短间隔（秒）
+    random_reply_cooldown: int = 60
+    # 只在这些群随机插话；空列表表示所有群
+    random_reply_groups: list[int] = []
+    # 群主和群管理员的消息是否也必回（SUPERUSERS 的消息总是必回）
+    always_reply_group_admins: bool = False
+    # 随机插话时参考的最近群聊条数
+    group_context_size: int = 20
     # 每个人在每个群里保留的对话轮数
     history_turns: int = 6
     max_reply_chars: int = 1500

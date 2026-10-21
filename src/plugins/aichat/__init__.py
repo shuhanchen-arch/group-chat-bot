@@ -1,5 +1,7 @@
 import asyncio
 import json
+import random
+import time
 from collections import defaultdict, deque
 from pathlib import Path
 
@@ -22,6 +24,7 @@ from .quota import QuotaStore
 HELP = (
     "用法：\n"
     "@我 + 内容：用本地模型聊天（不限次数）\n"
+    "平时我也会随机接群友的话\n"
     "/flash 内容：用 DeepSeek V4.1 Flash 回答（每人每天限次）\n"
     "/画 描述：用默认工作流生图\n"
     "/画 工作流名 描述：用指定工作流（如 /画 h3 一只猫）\n"
@@ -43,6 +46,10 @@ superusers = get_driver().config.superusers
 # 本地显卡同一时间只跑一个任务，避免爆显存
 local_gpu = asyncio.Semaphore(1)
 histories: dict[str, deque] = defaultdict(lambda: deque(maxlen=cfg.history_turns * 2))
+# 每个群最近的聊天记录，随机插话时给模型当上下文
+group_logs: dict[int, deque] = defaultdict(lambda: deque(maxlen=cfg.group_context_size))
+last_random_reply: dict[int, float] = {}
+SKIP_TOKEN = "[跳过]"
 
 KIND_FLASH = "flash"
 KIND_IMAGE = "image"
@@ -81,6 +88,30 @@ def is_superuser(event: MessageEvent) -> bool:
     return str(event.user_id) in superusers
 
 
+def is_admin(event: GroupMessageEvent) -> bool:
+    if is_superuser(event):
+        return True
+    return cfg.always_reply_group_admins and event.sender.role in ("owner", "admin")
+
+
+def display_name(event: GroupMessageEvent) -> str:
+    return event.sender.card or event.sender.nickname or str(event.user_id)
+
+
+def should_interject(event: GroupMessageEvent) -> bool:
+    """普通群消息是否要随机接话。管理员必回；其他人按概率、冷却时间决定。"""
+    if is_admin(event):
+        return True
+    if cfg.random_reply_groups and event.group_id not in cfg.random_reply_groups:
+        return False
+    if time.monotonic() - last_random_reply.get(event.group_id, -1e9) < cfg.random_reply_cooldown:
+        return False
+    # 显卡正忙就不插话，免得排队后回复已经过时
+    if local_gpu.locked():
+        return False
+    return random.random() < cfg.random_reply_prob
+
+
 def clip(text: str) -> str:
     if len(text) > cfg.max_reply_chars:
         return text[: cfg.max_reply_chars] + "…（太长已截断）"
@@ -113,11 +144,23 @@ async def ask(event: MessageEvent, text: str, use_flash: bool) -> str:
     return answer
 
 
+recorder = on_message(priority=1, block=False)
 flash_cmd = on_command("flash", aliases={"f"}, priority=5, block=True)
 draw_cmd = on_command("画", aliases={"draw"}, priority=5, block=True)
 quota_cmd = on_command("额度", priority=5, block=True)
 reset_cmd = on_command("重置", priority=5, block=True)
 chat = on_message(rule=to_me(), priority=10, block=True)
+# 前面的指令和 @ 聊天都会 block，能走到这里的是普通群消息
+interject = on_message(priority=20, block=True)
+
+
+@recorder.handle()
+async def _(event: MessageEvent):
+    if not isinstance(event, GroupMessageEvent):
+        return
+    text = event.get_plaintext().strip()
+    if text and not text.startswith("/"):
+        group_logs[event.group_id].append(f"{display_name(event)}：{text}")
 
 
 @flash_cmd.handle()
@@ -224,4 +267,45 @@ async def _(matcher: Matcher, event: MessageEvent):
     except Exception as e:
         logger.exception("本地模型调用失败")
         await reply(matcher, event, f"本地模型暂时不可用：{type(e).__name__}")
+    if isinstance(event, GroupMessageEvent):
+        group_logs[event.group_id].append(f"{cfg.bot_name}：{answer}")
     await reply(matcher, event, clip(answer))
+
+
+@interject.handle()
+async def _(matcher: Matcher, event: MessageEvent):
+    if not isinstance(event, GroupMessageEvent) or not event.get_plaintext().strip():
+        return
+    if not should_interject(event):
+        return
+    admin = is_admin(event)
+    if not admin:
+        last_random_reply[event.group_id] = time.monotonic()
+
+    name = display_name(event)
+    instruction = (
+        f"下面是群里最近的聊天记录，最后一条是「{name}」刚发的：\n"
+        + "\n".join(group_logs[event.group_id])
+        + f"\n\n请以{cfg.bot_name}的身份，像群友一样自然地接一句话回应「{name}」，只输出要说的话。"
+    )
+    if not admin:
+        instruction += f"如果觉得没必要插话，只输出 {SKIP_TOKEN}。"
+    messages = [
+        {"role": "system", "content": cfg.system_prompt},
+        {"role": "user", "content": instruction},
+    ]
+    try:
+        async with local_gpu:
+            answer = await chat_completion(
+                cfg.local_base_url, cfg.local_api_key, cfg.local_model, messages, cfg.request_timeout
+            )
+    except Exception:
+        logger.exception("随机插话失败")
+        return
+    answer = answer.strip()
+    if not answer or SKIP_TOKEN in answer:
+        return
+    group_logs[event.group_id].append(f"{cfg.bot_name}：{answer}")
+    if admin:
+        await reply(matcher, event, clip(answer))
+    await matcher.finish(clip(answer))
