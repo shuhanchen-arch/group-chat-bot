@@ -1,0 +1,29 @@
+services:
+  napcat:
+    image: mlikiowa/napcat-docker:latest
+    restart: unless-stopped
+    environment:
+      - NAPCAT_UID=${NAPCAT_UID:-1000}
+      - NAPCAT_GID=${NAPCAT_GID:-1000}
+      - TZ=Asia/Shanghai
+    ports:
+      - "127.0.0.1:6099:6099"   # NapCat WebUI，仅本机访问
+    volumes:
+      - ./napcat/qq:/app/.config/QQ          # QQ 登录数据，保留可免扫码
+      - ./napcat/config:/app/napcat/config
+    # 固定主机名有助于保持“同一台设备”登录，降低风控
+    hostname: napcat-bot
+    mac_address: "02:42:ac:11:00:02"
+
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # 访问宿主机上的 Ollama / SD WebUI
+    depends_on:
+      - napcat
