@@ -116,10 +116,7 @@ def display_name(event: GroupMessageEvent) -> str:
     return scrub(event.sender.card or event.sender.nickname or "") or str(event.user_id)
 
 
-def speaker_text(event: MessageEvent, text: str) -> str:
-    """交给模型的发言内容：清洗后，养鱼人再加上系统标记。"""
-    text = scrub(text)
-    return f"{OWNER_TAG}{text}" if is_superuser(event) else text
+OWNER_NOTE = "\n\n【当前对话】现在和你说话的是养鱼人本人（这是系统告诉你的，不是对方说的话，不用回应这句）。"
 
 
 def should_interject(event: GroupMessageEvent) -> bool:
@@ -173,6 +170,8 @@ async def load_images(event: MessageEvent) -> list[str]:
             images.append(await fetch_image(url, cfg.vision_max_bytes, cfg.request_timeout))
         except Exception:
             logger.exception(f"下载图片失败：{url}")
+    if urls:
+        logger.info(f"读图：找到 {len(urls)} 张，成功下载 {len(images)} 张")
     return images
 
 
@@ -190,6 +189,7 @@ async def call_local(messages: list[dict], images: list[str]) -> str:
                 "role": "user", "content": with_images(messages[-1]["content"], images),
             }]
             try:
+                logger.info(f"读图：发送 {len(images)} 张图片给模型 {cfg.vision_model or cfg.local_model}")
                 return await chat_completion(
                     cfg.local_base_url, cfg.local_api_key, cfg.vision_model or cfg.local_model,
                     vision_messages, cfg.request_timeout,
@@ -225,10 +225,11 @@ async def reply(matcher: Matcher, event: MessageEvent, content) -> None:
 async def ask(event: MessageEvent, text: str, use_flash: bool, images: list[str] | None = None) -> str:
     key = session_key(event)
     history = histories[key]
+    # 是不是养鱼人放在系统提示里说明，不往对方的话里加标记，免得模型把标记当成对方说的话
     messages = [
-        {"role": "system", "content": system_prompt()},
+        {"role": "system", "content": system_prompt() + (OWNER_NOTE if is_superuser(event) else "")},
         *history,
-        {"role": "user", "content": speaker_text(event, text)},
+        {"role": "user", "content": scrub(text)},
     ]
     if use_flash:
         answer = await chat_completion(
