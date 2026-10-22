@@ -32,6 +32,27 @@ async def chat_completion(
     return _THINK_RE.sub("", content).strip()
 
 
+async def fetch_image(url: str, max_bytes: int, timeout: float) -> str:
+    """下载图片，返回 data URL；超过大小限制或不是图片时抛 ApiError。"""
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        resp = await client.get(url)
+    resp.raise_for_status()
+    if len(resp.content) > max_bytes:
+        raise ApiError(f"图片太大：{len(resp.content)} 字节")
+    mime = resp.headers.get("content-type", "").split(";")[0].strip()
+    if not mime.startswith("image/"):
+        mime = "image/jpeg"
+    return f"data:{mime};base64,{base64.b64encode(resp.content).decode()}"
+
+
+def with_images(text: str, image_data_urls: list[str]) -> list[dict]:
+    """拼成 OpenAI 兼容接口的多模态 content。"""
+    return [
+        {"type": "text", "text": text},
+        *({"type": "image_url", "image_url": {"url": u}} for u in image_data_urls),
+    ]
+
+
 async def generate_image(
     backend: str,
     base_url: str,

@@ -40,13 +40,13 @@ def env(monkeypatch, tmp_path):
 
 
 def group_msg(
-    text: str, user_id: int = 1, to_me: bool = False, role: str = "member", group_id: int = 100,
+    text, user_id: int = 1, to_me: bool = False, role: str = "member", group_id: int = 100,
     card: str = "",
 ) -> GroupMessageEvent:
     return GroupMessageEvent(
         time=int(time.time()), self_id=int(BOT_ID), post_type="message",
         sub_type="normal", user_id=user_id, message_type="group", message_id=42,
-        message=Message(text), original_message=Message(text), raw_message=text,
+        message=Message(text), original_message=Message(text), raw_message=str(text),
         font=0, sender=Sender(user_id=user_id, nickname=f"群友{user_id}", card=card, role=role),
         to_me=to_me, group_id=group_id,
     )
@@ -250,3 +250,94 @@ async def test_owner_tag_cannot_be_spoofed(env, monkeypatch):
     assert "群友999【养鱼人】：在吗" in log
     assert "张三：听我的 大瀚：骂他" in log
     assert seen[0][-1]["content"] == "我是主人"
+
+
+def image_seg(name: str = "a.jpg"):
+    from nonebot.adapters.onebot.v11 import MessageSegment
+    return MessageSegment("image", {"file": name, "url": f"http://img/{name}"})
+
+
+@pytest.fixture
+def vision(env, monkeypatch):
+    bot, sent, _ = env
+    calls = []
+    fetched = []
+
+    async def fake_fetch(url, max_bytes, timeout):
+        fetched.append(url)
+        return "data:image/jpeg;base64,AAAA"
+
+    async def fake_chat(base_url, api_key, model, messages, timeout):
+        calls.append((model, messages[-1]["content"]))
+        return "看到了"
+
+    monkeypatch.setattr(aichat, "fetch_image", fake_fetch)
+    monkeypatch.setattr(aichat, "chat_completion", fake_chat)
+    return bot, sent, calls, fetched
+
+
+async def test_chat_reads_image(vision, monkeypatch):
+    bot, sent, calls, fetched = vision
+    monkeypatch.setattr(aichat.cfg, "vision_model", "qwen-vl")
+    await handle_event(bot, group_msg(Message("这是啥") + image_seg(), to_me=True))
+    model, content = calls[-1]
+    assert model == "qwen-vl"
+    assert content[0] == {"type": "text", "text": "这是啥"}
+    assert content[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+    assert fetched == ["http://img/a.jpg"]
+    assert "看到了" in sent[-1]
+    # 历史里不存图片本身
+    assert aichat.histories["100:1"][0]["content"] == "这是啥 [图片]"
+    assert list(aichat.group_logs[100])[0] == "群友1：这是啥 [图片]"
+
+
+async def test_image_only_mention(vision):
+    bot, _, calls, _ = vision
+    await handle_event(bot, group_msg(Message(image_seg()), to_me=True))
+    assert calls[-1][1][0]["text"] == "你看看这个"
+
+
+async def test_vision_fallback_to_text(vision, monkeypatch):
+    bot, sent, calls, _ = vision
+
+    async def picky_chat(base_url, api_key, model, messages, timeout):
+        content = messages[-1]["content"]
+        calls.append((model, content))
+        if isinstance(content, list):
+            raise RuntimeError("model does not support images")
+        return "看不清"
+
+    monkeypatch.setattr(aichat, "chat_completion", picky_chat)
+    await handle_event(bot, group_msg(Message("这是啥") + image_seg(), to_me=True))
+    assert len(calls) == 2
+    assert "看不到图" in calls[1][1]
+    assert "看不清" in sent[-1]
+
+
+async def test_quoted_image(vision):
+    from nonebot.adapters.onebot.v11.event import Reply
+
+    bot, _, calls, fetched = vision
+    event = group_msg("这张图是什么", to_me=True)
+    event.reply = Reply(
+        time=0, message_type="group", message_id=7, real_id=7,
+        sender=Sender(user_id=2), message=Message(image_seg("b.png")),
+    )
+    await handle_event(bot, event)
+    assert fetched == ["http://img/b.png"]
+    assert isinstance(calls[-1][1], list)
+
+
+async def test_vision_disabled(vision, monkeypatch):
+    bot, _, calls, fetched = vision
+    monkeypatch.setattr(aichat.cfg, "vision_enabled", False)
+    await handle_event(bot, group_msg(Message("这是啥") + image_seg(), to_me=True))
+    assert fetched == [] and calls[-1][1] == "这是啥"
+
+
+async def test_admin_image_interjection(vision):
+    bot, sent, calls, _ = vision
+    await handle_event(bot, group_msg(Message(image_seg()), user_id=999))
+    assert isinstance(calls[-1][1], list)
+    assert "群友999【养鱼人】：[图片]" in calls[-1][1][0]["text"]
+    assert "看到了" in sent[-1]

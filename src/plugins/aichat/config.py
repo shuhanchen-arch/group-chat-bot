@@ -7,6 +7,13 @@ class Config(BaseModel):
     local_api_key: str = ""
     local_model: str = "qwen"
 
+    # 读图：消息或被引用的消息里有图片时，连图片一起发给本地模型（需要模型支持视觉）
+    vision_enabled: bool = True
+    # 留空则用 local_model；本地聊天模型不支持看图时，可以单独指定一个视觉模型
+    vision_model: str = ""
+    vision_max_images: int = 2
+    vision_max_bytes: int = 5_000_000
+
     # 云端模型（限次数），默认 DeepSeek V4.1 Flash
     flash_base_url: str = "https://api.deepseek.com"
     flash_api_key: str = ""

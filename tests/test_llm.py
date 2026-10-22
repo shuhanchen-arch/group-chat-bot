@@ -110,3 +110,10 @@ async def test_comfyui_error(monkeypatch):
     patch_client(monkeypatch, handler)
     with pytest.raises(llm.ApiError):
         await llm.comfyui_generate("http://h", WORKFLOW, "cat", 5, poll_interval=0)
+
+
+async def test_fetch_image(monkeypatch):
+    patch_client(monkeypatch, lambda r: httpx.Response(200, content=b"PNG", headers={"content-type": "image/png"}))
+    assert await llm.fetch_image("http://img/a", 100, 5) == "data:image/png;base64," + base64.b64encode(b"PNG").decode()
+    with pytest.raises(llm.ApiError):
+        await llm.fetch_image("http://img/a", 2, 5)
