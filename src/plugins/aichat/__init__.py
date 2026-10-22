@@ -13,7 +13,9 @@ from nonebot.adapters.onebot.v11 import (
     MessageEvent,
     MessageSegment,
 )
+from nonebot.exception import IgnoredException
 from nonebot.matcher import Matcher
+from nonebot.message import event_preprocessor
 from nonebot.params import CommandArg
 from nonebot.plugin import PluginMetadata
 from nonebot.rule import to_me
@@ -241,6 +243,12 @@ async def ask(event: MessageEvent, text: str, use_flash: bool, images: list[str]
     history.append({"role": "user", "content": f"{text} {IMAGE_MARK}" if images else text})
     history.append({"role": "assistant", "content": answer})
     return answer
+
+
+@event_preprocessor
+async def _ignore_blocked_groups(event: MessageEvent):
+    if isinstance(event, GroupMessageEvent) and event.group_id in cfg.blocked_groups:
+        raise IgnoredException("屏蔽的群")
 
 
 recorder = on_message(priority=1, block=False)

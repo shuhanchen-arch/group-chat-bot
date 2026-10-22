@@ -400,3 +400,14 @@ async def test_owner_marked_in_system_prompt_not_text(env, monkeypatch):
     await handle_event(bot, group_msg("这是什么", user_id=999, to_me=True))
     assert seen[-1][0]["content"].endswith(aichat.OWNER_NOTE)
     assert seen[-1][-1]["content"] == "这是什么"
+
+
+async def test_blocked_group(env, monkeypatch):
+    bot, sent, calls = env
+    monkeypatch.setattr(aichat.cfg, "blocked_groups", [100])
+    await handle_event(bot, group_msg("你好", to_me=True))
+    await handle_event(bot, group_msg("/额度"))
+    await handle_event(bot, group_msg("hi", user_id=999))
+    assert sent == [] and calls == [] and not aichat.group_logs[100]
+    await handle_event(bot, group_msg("你好", to_me=True, group_id=200))
+    assert len(calls) == 1
