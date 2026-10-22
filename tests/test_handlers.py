@@ -176,7 +176,7 @@ async def test_interject_uses_group_context(env, monkeypatch):
     assert "群友2：第一句" in seen[0] and "群友999【养鱼人】：第二句" in seen[0]
     assert aichat.SKIP_TOKEN not in seen[0]  # 管理员不允许跳过
     assert "CQ:reply" in sent[-1]
-    assert list(aichat.group_logs[100])[-1] == "大肥鱼：咕噜"
+    assert list(aichat.group_logs[100])[-1] == "你（机器人）：咕噜"
 
 
 async def test_admin_always_replied(env, monkeypatch):
@@ -411,3 +411,23 @@ async def test_blocked_group(env, monkeypatch):
     assert sent == [] and calls == [] and not aichat.group_logs[100]
     await handle_event(bot, group_msg("你好", to_me=True, group_id=200))
     assert len(calls) == 1
+
+
+async def test_group_specific_persona(env, monkeypatch, tmp_path):
+    bot, _, _ = env
+    prompts = []
+
+    async def fake_chat(base_url, api_key, model, messages, timeout):
+        prompts.append(messages[0]["content"])
+        return "好"
+
+    monkeypatch.setattr(aichat, "chat_completion", fake_chat)
+    (tmp_path / "default.txt").write_text("默认人设", encoding="utf-8")
+    (tmp_path / "family.txt").write_text("家庭顾问", encoding="utf-8")
+    monkeypatch.setattr(aichat.cfg, "persona_file", str(tmp_path / "default.txt"))
+    monkeypatch.setattr(aichat.cfg, "group_personas", {200: str(tmp_path / "family.txt")})
+    await handle_event(bot, group_msg("你好", to_me=True, group_id=100))
+    await handle_event(bot, group_msg("你好", to_me=True, group_id=200))
+    await handle_event(bot, group_msg("在吗", user_id=999, group_id=200))  # 随机插话路径
+    assert prompts[0].startswith("默认人设")
+    assert prompts[1].startswith("家庭顾问") and prompts[2].startswith("家庭顾问")

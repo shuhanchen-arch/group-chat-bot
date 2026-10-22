@@ -3,6 +3,6 @@ WORKDIR /app
 ENV TZ=Asia/Shanghai PYTHONUNBUFFERED=1
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY bot.py pyproject.toml persona.txt ./
+COPY bot.py pyproject.toml persona.txt persona_family.txt ./
 COPY src ./src
 CMD ["python", "bot.py"]

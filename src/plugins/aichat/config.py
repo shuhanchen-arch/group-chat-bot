@@ -43,6 +43,10 @@ class Config(BaseModel):
     bot_name: str = "大肥鱼"
     # 人设文件，每次回复时重新读取，修改后无需重启；文件不存在时使用下面的 system_prompt
     persona_file: str = "persona.txt"
+    # 按群单独指定人设文件，如 {"123456789": "persona_family.txt"}；没列出的群用 persona_file
+    group_personas: dict[int, str] = {}
+    # 私聊使用的人设文件；留空则用 persona_file
+    private_persona: str = ""
     system_prompt: str = (
         "你是「大肥鱼」，QQ群里的一个常驻成员。性格成熟松弛、情绪稳定，带点冷幽默和自嘲，"
         "认真问问题就干脆地答。说话像有阅历的普通群友，通常一两句话、不超过50个字，"

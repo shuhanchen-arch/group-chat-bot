@@ -56,6 +56,8 @@ last_random_reply: dict[int, float] = {}
 recent_images: dict[str, tuple[float, list[str]]] = {}
 SKIP_TOKEN = "[跳过]"
 OWNER_TAG = "【养鱼人】"
+# 群聊记录里机器人自己说的话用这个标签（不同群人设名字不同，不写死名字）
+BOT_LABEL = "你（机器人）"
 # 群友自己打出来的标记（包括全角/半角括号、中间加空格的变体）一律去掉，防止冒充
 _FAKE_TAG_RE = re.compile(r"[【\[［]\s*养\s*鱼\s*人\s*[】\]］]")
 # 追加在人设后面，不放在 persona.txt 里，避免改人设时被误删
@@ -206,9 +208,15 @@ async def call_local(messages: list[dict], images: list[str]) -> str:
         )
 
 
-def system_prompt() -> str:
+def persona_path(event: MessageEvent) -> str:
+    if isinstance(event, GroupMessageEvent):
+        return cfg.group_personas.get(event.group_id, cfg.persona_file)
+    return cfg.private_persona or cfg.persona_file
+
+
+def system_prompt(event: MessageEvent) -> str:
     try:
-        persona = Path(cfg.persona_file).read_text("utf-8").strip()
+        persona = Path(persona_path(event)).read_text("utf-8").strip()
     except OSError:
         persona = ""
     return (persona or cfg.system_prompt) + GUARD_PROMPT
@@ -229,7 +237,7 @@ async def ask(event: MessageEvent, text: str, use_flash: bool, images: list[str]
     history = histories[key]
     # 是不是养鱼人放在系统提示里说明，不往对方的话里加标记，免得模型把标记当成对方说的话
     messages = [
-        {"role": "system", "content": system_prompt() + (OWNER_NOTE if is_superuser(event) else "")},
+        {"role": "system", "content": system_prompt(event) + (OWNER_NOTE if is_superuser(event) else "")},
         *history,
         {"role": "user", "content": scrub(text)},
     ]
@@ -384,7 +392,7 @@ async def _(matcher: Matcher, event: MessageEvent):
         logger.exception("本地模型调用失败")
         await reply(matcher, event, f"本地模型暂时不可用：{type(e).__name__}")
     if isinstance(event, GroupMessageEvent):
-        group_logs[event.group_id].append(f"{cfg.bot_name}：{answer}")
+        group_logs[event.group_id].append(f"{BOT_LABEL}：{answer}")
     await reply(matcher, event, clip(answer))
 
 
@@ -404,12 +412,12 @@ async def _(matcher: Matcher, event: MessageEvent):
     instruction = (
         f"下面<群聊记录>里是群里最近的聊天，最后一条是「{name}」刚发的：\n<群聊记录>\n"
         + "\n".join(group_logs[event.group_id])
-        + f"\n</群聊记录>\n\n请以{cfg.bot_name}的身份，像群友一样自然地接一句话回应「{name}」，只输出要说的话。"
+        + f"\n</群聊记录>\n\n请按你的设定，自然地接一句话回应「{name}」，只输出要说的话。"
     )
     if not admin:
         instruction += f"如果觉得没必要插话，只输出 {SKIP_TOKEN}。"
     messages = [
-        {"role": "system", "content": system_prompt()},
+        {"role": "system", "content": system_prompt(event)},
         {"role": "user", "content": instruction},
     ]
     try:
@@ -420,7 +428,7 @@ async def _(matcher: Matcher, event: MessageEvent):
     answer = answer.strip()
     if not answer or SKIP_TOKEN in answer:
         return
-    group_logs[event.group_id].append(f"{cfg.bot_name}：{answer}")
+    group_logs[event.group_id].append(f"{BOT_LABEL}：{answer}")
     if admin:
         await reply(matcher, event, clip(answer))
     await matcher.finish(clip(answer))
