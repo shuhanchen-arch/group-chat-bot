@@ -117,3 +117,20 @@ async def test_fetch_image(monkeypatch):
     assert await llm.fetch_image("http://img/a", 100, 5) == "data:image/png;base64," + base64.b64encode(b"PNG").decode()
     with pytest.raises(llm.ApiError):
         await llm.fetch_image("http://img/a", 2, 5)
+
+
+async def test_ollama_chat_no_think_and_images(monkeypatch):
+    def handler(request):
+        assert request.url.path == "/api/chat"
+        body = json.loads(request.content)
+        assert body["think"] is False and body["stream"] is False
+        user = body["messages"][-1]
+        assert user == {"role": "user", "content": "这是啥", "images": ["AAAA"]}
+        return httpx.Response(200, json={"message": {"role": "assistant", "content": "一只猫"}})
+
+    patch_client(monkeypatch, handler)
+    messages = [
+        {"role": "system", "content": "s"},
+        {"role": "user", "content": llm.with_images("这是啥", ["data:image/jpeg;base64,AAAA"])},
+    ]
+    assert await llm.ollama_chat("http://h:11434", "m", messages, 5, think=False) == "一只猫"

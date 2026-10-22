@@ -6,6 +6,10 @@ class Config(BaseModel):
     local_base_url: str = "http://127.0.0.1:8080/v1"
     local_api_key: str = ""
     local_model: str = "qwen"
+    # 本地接口类型：auto（地址是 Ollama 的 11434 端口时用 Ollama 原生接口）/ ollama / openai
+    local_api: str = "auto"
+    # 是否让本地模型先"思考"再回答。思考会慢很多，群聊里建议关闭（只对 Ollama 原生接口有效）
+    local_think: bool = False
 
     # 读图：消息或被引用的消息里有图片时，连图片一起发给本地模型（需要模型支持视觉）
     vision_enabled: bool = True
@@ -71,6 +75,6 @@ class Config(BaseModel):
     # 每个人在每个群里保留的对话轮数
     history_turns: int = 6
     max_reply_chars: int = 1500
-    request_timeout: float = 120.0
+    request_timeout: float = 180.0
     quota_db_path: str = "data/quota.db"
     quota_timezone: str = "Asia/Shanghai"

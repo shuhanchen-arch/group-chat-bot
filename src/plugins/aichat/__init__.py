@@ -21,7 +21,7 @@ from nonebot.plugin import PluginMetadata
 from nonebot.rule import to_me
 
 from .config import Config
-from .llm import chat_completion, comfyui_generate, fetch_image, generate_image, with_images
+from .llm import chat_completion, comfyui_generate, fetch_image, generate_image, ollama_chat, with_images
 from .quota import QuotaStore
 
 HELP = (
@@ -185,6 +185,21 @@ def mentions_image(event: MessageEvent) -> bool:
     return any(seg.type == "image" for seg in segments)
 
 
+def use_ollama_api() -> bool:
+    if cfg.local_api == "auto":
+        return ":11434" in cfg.local_base_url
+    return cfg.local_api == "ollama"
+
+
+async def local_chat(model: str, messages: list[dict]) -> str:
+    if use_ollama_api():
+        base = cfg.local_base_url.rstrip("/").removesuffix("/v1")
+        return await ollama_chat(base, model, messages, cfg.request_timeout, cfg.local_think)
+    return await chat_completion(
+        cfg.local_base_url, cfg.local_api_key, model, messages, cfg.request_timeout
+    )
+
+
 async def call_local(messages: list[dict], images: list[str]) -> str:
     """调用本地模型；有图片时先尝试视觉模型，失败就退回纯文字。"""
     async with local_gpu:
@@ -194,18 +209,13 @@ async def call_local(messages: list[dict], images: list[str]) -> str:
             }]
             try:
                 logger.info(f"读图：发送 {len(images)} 张图片给模型 {cfg.vision_model or cfg.local_model}")
-                return await chat_completion(
-                    cfg.local_base_url, cfg.local_api_key, cfg.vision_model or cfg.local_model,
-                    vision_messages, cfg.request_timeout,
-                )
+                return await local_chat(cfg.vision_model or cfg.local_model, vision_messages)
             except Exception:
                 logger.exception("看图失败，改用纯文字回复（模型可能不支持视觉）")
             messages = [*messages[:-1], {
                 "role": "user", "content": messages[-1]["content"] + "（对方发了图片，但你现在看不到图）",
             }]
-        return await chat_completion(
-            cfg.local_base_url, cfg.local_api_key, cfg.local_model, messages, cfg.request_timeout
-        )
+        return await local_chat(cfg.local_model, messages)
 
 
 def persona_path(event: MessageEvent) -> str:

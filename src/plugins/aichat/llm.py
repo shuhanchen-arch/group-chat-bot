@@ -32,6 +32,38 @@ async def chat_completion(
     return _THINK_RE.sub("", content).strip()
 
 
+def _to_ollama_message(message: dict) -> dict:
+    """OpenAI 格式的消息转成 Ollama 原生格式（图片单独放在 images 里，只要 base64 部分）。"""
+    content = message["content"]
+    if isinstance(content, str):
+        return {"role": message["role"], "content": content}
+    text = "".join(part["text"] for part in content if part["type"] == "text")
+    images = [
+        part["image_url"]["url"].split(",", 1)[-1] for part in content if part["type"] == "image_url"
+    ]
+    return {"role": message["role"], "content": text, "images": images}
+
+
+async def ollama_chat(
+    base_url: str, model: str, messages: list[dict], timeout: float, think: bool
+) -> str:
+    """调用 Ollama 原生 /api/chat，可以关闭思考模式（OpenAI 兼容接口关不掉）。"""
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.post(
+            f"{base_url.rstrip('/')}/api/chat",
+            json={
+                "model": model,
+                "messages": [_to_ollama_message(m) for m in messages],
+                "stream": False,
+                "think": think,
+            },
+        )
+    if resp.status_code != 200:
+        raise ApiError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+    content = resp.json()["message"].get("content") or ""
+    return _THINK_RE.sub("", content).strip()
+
+
 async def fetch_image(url: str, max_bytes: int, timeout: float) -> str:
     """下载图片，返回 data URL；超过大小限制或不是图片时抛 ApiError。"""
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:

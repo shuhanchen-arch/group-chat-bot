@@ -462,3 +462,20 @@ async def test_private_persona_per_user(env, monkeypatch, tmp_path):
     monkeypatch.setattr(aichat.cfg, "private_persona", str(tmp_path / "private.txt"))
     await handle_event(bot, private(6))
     assert [p.split(aichat.GUARD_PROMPT)[0] for p in prompts] == ["family", "default", "private"]
+
+
+async def test_ollama_url_uses_native_api(env, monkeypatch):
+    bot, sent, calls = env
+    native = []
+
+    async def fake_ollama(base_url, model, messages, timeout, think):
+        native.append((base_url, think))
+        return "好的"
+
+    monkeypatch.setattr(aichat, "ollama_chat", fake_ollama)
+    monkeypatch.setattr(aichat.cfg, "local_base_url", "http://127.0.0.1:11434/v1")
+    await handle_event(bot, group_msg("你好", to_me=True))
+    assert native == [("http://127.0.0.1:11434", False)] and calls == []
+    monkeypatch.setattr(aichat.cfg, "local_api", "openai")
+    await handle_event(bot, group_msg("你好", to_me=True))
+    assert len(calls) == 1
