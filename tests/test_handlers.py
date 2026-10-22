@@ -33,6 +33,7 @@ def env(monkeypatch, tmp_path):
     aichat.histories.clear()
     aichat.group_logs.clear()
     aichat.last_random_reply.clear()
+    aichat.recent_images.clear()
     # 默认不随机插话，单独的测试里再打开
     monkeypatch.setattr(aichat.cfg, "random_reply_prob", 0.0)
     adapter = nonebot.get_adapter(Adapter)
@@ -362,3 +363,25 @@ async def test_image_url_in_file_field(vision):
     seg = MessageSegment("image", {"file": "https://img/c.jpg"})
     await handle_event(bot, group_msg(Message("看") + seg, to_me=True))
     assert fetched == ["https://img/c.jpg"]
+
+
+async def test_image_then_mention(vision, monkeypatch):
+    bot, _, calls, fetched = vision
+    await handle_event(bot, group_msg(Message(image_seg("cat.jpg"))))  # 先单独发图
+    await handle_event(bot, group_msg("这是什么", to_me=True))         # 再 @ 机器人
+    assert fetched == ["http://img/cat.jpg"]
+    assert isinstance(calls[-1][1], list)
+    # 用过一次就作废
+    await handle_event(bot, group_msg("还有呢", to_me=True))
+    assert calls[-1][1] == "还有呢"
+
+
+async def test_recent_image_is_per_user_and_expires(vision, monkeypatch):
+    bot, _, calls, fetched = vision
+    await handle_event(bot, group_msg(Message(image_seg("x.jpg")), user_id=2))
+    await handle_event(bot, group_msg("这是什么", to_me=True))  # 别人的图不算
+    assert fetched == []
+    await handle_event(bot, group_msg(Message(image_seg("y.jpg"))))
+    monkeypatch.setattr(aichat.cfg, "vision_recent_seconds", -1)  # 模拟过期
+    await handle_event(bot, group_msg("这是什么", to_me=True))
+    assert fetched == []

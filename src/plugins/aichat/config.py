@@ -13,6 +13,8 @@ class Config(BaseModel):
     vision_model: str = ""
     vision_max_images: int = 2
     vision_max_bytes: int = 5_000_000
+    # 手机上图片和文字没法一起发：先发图、再 @ 机器人时，用这个人多少秒内发的最后一张图
+    vision_recent_seconds: int = 120
 
     # 云端模型（限次数），默认 DeepSeek V4.1 Flash
     flash_base_url: str = "https://api.deepseek.com"

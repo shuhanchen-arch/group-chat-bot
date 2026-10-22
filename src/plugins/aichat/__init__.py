@@ -50,6 +50,8 @@ histories: dict[str, deque] = defaultdict(lambda: deque(maxlen=cfg.history_turns
 # 每个群最近的聊天记录，随机插话时给模型当上下文
 group_logs: dict[int, deque] = defaultdict(lambda: deque(maxlen=cfg.group_context_size))
 last_random_reply: dict[int, float] = {}
+# 每个人最近发的图片：session_key -> (发送时间, 图片地址)
+recent_images: dict[str, tuple[float, list[str]]] = {}
 SKIP_TOKEN = "[跳过]"
 OWNER_TAG = "【养鱼人】"
 # 群友自己打出来的标记（包括全角/半角括号、中间加空格的变体）一律去掉，防止冒充
@@ -134,10 +136,10 @@ def should_interject(event: GroupMessageEvent) -> bool:
     return random.random() < cfg.random_reply_prob
 
 
-def image_urls(event: MessageEvent) -> list[str]:
-    """本条消息和被引用消息里的图片地址。"""
+def image_urls(event: MessageEvent, include_reply: bool = True) -> list[str]:
+    """本条消息（和被引用消息）里的图片地址。"""
     segments = list(event.message)
-    if event.reply:
+    if include_reply and event.reply:
         segments += list(event.reply.message)
     urls = []
     for seg in segments:
@@ -159,8 +161,14 @@ def has_image(event: MessageEvent) -> bool:
 async def load_images(event: MessageEvent) -> list[str]:
     if not cfg.vision_enabled:
         return []
+    urls = image_urls(event)
+    if not urls:
+        # 没带图也没引用图：用这个人刚发过的图（用过一次就作废）
+        sent_at, recent = recent_images.pop(session_key(event), (0.0, []))
+        if time.monotonic() - sent_at <= cfg.vision_recent_seconds:
+            urls = recent
     images = []
-    for url in image_urls(event):
+    for url in urls:
         try:
             images.append(await fetch_image(url, cfg.vision_max_bytes, cfg.request_timeout))
         except Exception:
@@ -251,6 +259,8 @@ async def _(event: MessageEvent):
     text = event.get_plaintext().strip()
     if text.startswith("/"):
         return
+    if has_image(event) and not event.is_tome():
+        recent_images[session_key(event)] = (time.monotonic(), image_urls(event, include_reply=False))
     content = " ".join(x for x in (scrub(text), IMAGE_MARK if has_image(event) else "") if x)
     if content:
         tag = OWNER_TAG if is_superuser(event) else ""
