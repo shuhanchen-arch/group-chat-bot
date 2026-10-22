@@ -78,6 +78,23 @@ docker compose up -d --build
    - 消息格式：`array`
 4. `docker compose logs -f bot` 看到 `OneBot V11 | Bot xxx connected` 即成功。
 
+## 国内网络（不开 VPN）
+
+小号 QQ 不要走 VPN，下载依赖和模型尽量都用国内源：
+
+```powershell
+# pip 用清华源（只需设置一次）
+.\.venv\Scripts\python.exe -m pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
+
+# git 通过 GitHub 加速镜像拉代码（只需设置一次；镜像失效时换一个或删掉这条配置）
+git config --global url."https://ghproxy.net/https://github.com/".insteadOf "https://github.com/"
+
+# Ollama 模型从魔搭（ModelScope）下载 GGUF
+ollama pull modelscope.cn/<组织>/<仓库名>-GGUF
+```
+
+运行时用到的 DeepSeek API、本地 Ollama / ComfyUI 本身都不需要 VPN。
+
 ## 关于小号风控（务必看）
 
 这个号之前接过机器人，已经有被标记的可能，以下能降低被冻结的概率：
