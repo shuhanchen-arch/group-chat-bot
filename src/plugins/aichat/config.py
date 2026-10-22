@@ -45,7 +45,9 @@ class Config(BaseModel):
     persona_file: str = "persona.txt"
     # 按群单独指定人设文件，如 {"123456789": "persona_family.txt"}；没列出的群用 persona_file
     group_personas: dict[int, str] = {}
-    # 私聊使用的人设文件；留空则用 persona_file
+    # 按 QQ 号单独指定私聊人设，如 {"10001": "persona_family.txt"}；没列出的人用 private_persona
+    user_personas: dict[int, str] = {}
+    # 其他人私聊使用的人设文件；留空则用 persona_file
     private_persona: str = ""
     system_prompt: str = (
         "你是「大肥鱼」，QQ群里的一个常驻成员。性格成熟松弛、情绪稳定，带点冷幽默和自嘲，"

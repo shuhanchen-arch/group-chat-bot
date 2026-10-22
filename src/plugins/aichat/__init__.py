@@ -211,7 +211,7 @@ async def call_local(messages: list[dict], images: list[str]) -> str:
 def persona_path(event: MessageEvent) -> str:
     if isinstance(event, GroupMessageEvent):
         return cfg.group_personas.get(event.group_id, cfg.persona_file)
-    return cfg.private_persona or cfg.persona_file
+    return cfg.user_personas.get(event.user_id) or cfg.private_persona or cfg.persona_file
 
 
 def system_prompt(event: MessageEvent) -> str:

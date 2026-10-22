@@ -431,3 +431,34 @@ async def test_group_specific_persona(env, monkeypatch, tmp_path):
     await handle_event(bot, group_msg("在吗", user_id=999, group_id=200))  # 随机插话路径
     assert prompts[0].startswith("默认人设")
     assert prompts[1].startswith("家庭顾问") and prompts[2].startswith("家庭顾问")
+
+
+async def test_private_persona_per_user(env, monkeypatch, tmp_path):
+    from nonebot.adapters.onebot.v11 import PrivateMessageEvent
+
+    bot, _, _ = env
+    prompts = []
+
+    async def fake_chat(base_url, api_key, model, messages, timeout):
+        prompts.append(messages[0]["content"])
+        return "好"
+
+    monkeypatch.setattr(aichat, "chat_completion", fake_chat)
+    for name in ("default", "family", "private"):
+        (tmp_path / f"{name}.txt").write_text(name, encoding="utf-8")
+    monkeypatch.setattr(aichat.cfg, "persona_file", str(tmp_path / "default.txt"))
+    monkeypatch.setattr(aichat.cfg, "user_personas", {5: str(tmp_path / "family.txt")})
+
+    def private(user_id):
+        return PrivateMessageEvent(
+            time=0, self_id=int(BOT_ID), post_type="message", sub_type="friend",
+            user_id=user_id, message_type="private", message_id=1, message=Message("你好"),
+            original_message=Message("你好"), raw_message="你好", font=0,
+            sender=Sender(user_id=user_id), to_me=True,
+        )
+
+    await handle_event(bot, private(5))
+    await handle_event(bot, private(6))
+    monkeypatch.setattr(aichat.cfg, "private_persona", str(tmp_path / "private.txt"))
+    await handle_event(bot, private(6))
+    assert [p.split(aichat.GUARD_PROMPT)[0] for p in prompts] == ["family", "default", "private"]
