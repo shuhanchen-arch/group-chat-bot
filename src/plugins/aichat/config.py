@@ -40,6 +40,9 @@ class Config(BaseModel):
         "不卖萌、不用语气词和颜文字，不使用Markdown，不说客服话，不自称AI助手。"
     )
 
+    # 只响应 SUPERUSERS 的私聊，忽略所有群消息
+    private_only: bool = False
+
     # 随机插话：群友的普通消息（没有 @ 机器人、不是指令）按概率回复
     random_reply_prob: float = 0.1
     # 同一个群两次随机插话的最短间隔（秒）

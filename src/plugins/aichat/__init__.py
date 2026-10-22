@@ -12,11 +12,12 @@ from nonebot.adapters.onebot.v11 import (
     Message,
     MessageEvent,
     MessageSegment,
+    PrivateMessageEvent,
 )
 from nonebot.matcher import Matcher
 from nonebot.params import CommandArg
 from nonebot.plugin import PluginMetadata
-from nonebot.rule import to_me
+from nonebot.rule import Rule, to_me
 
 from .config import Config
 from .llm import chat_completion, comfyui_generate, generate_image
@@ -173,14 +174,23 @@ async def ask(event: MessageEvent, text: str, use_flash: bool) -> str:
     return answer
 
 
-recorder = on_message(priority=1, block=False)
-flash_cmd = on_command("flash", aliases={"f"}, priority=5, block=True)
-draw_cmd = on_command("画", aliases={"draw"}, priority=5, block=True)
-quota_cmd = on_command("额度", priority=5, block=True)
-reset_cmd = on_command("重置", priority=5, block=True)
-chat = on_message(rule=to_me(), priority=10, block=True)
+def _allowed(event: MessageEvent) -> bool:
+    """private_only 开启时，只放行 SUPERUSERS 的私聊。"""
+    if not cfg.private_only:
+        return True
+    return isinstance(event, PrivateMessageEvent) and is_superuser(event)
+
+
+allowed = Rule(_allowed)
+
+recorder = on_message(rule=allowed, priority=1, block=False)
+flash_cmd = on_command("flash", aliases={"f"}, rule=allowed, priority=5, block=True)
+draw_cmd = on_command("画", aliases={"draw"}, rule=allowed, priority=5, block=True)
+quota_cmd = on_command("额度", rule=allowed, priority=5, block=True)
+reset_cmd = on_command("重置", rule=allowed, priority=5, block=True)
+chat = on_message(rule=to_me() & allowed, priority=10, block=True)
 # 前面的指令和 @ 聊天都会 block，能走到这里的是普通群消息
-interject = on_message(priority=20, block=True)
+interject = on_message(rule=allowed, priority=20, block=True)
 
 
 @recorder.handle()
