@@ -139,8 +139,17 @@ def image_urls(event: MessageEvent) -> list[str]:
     segments = list(event.message)
     if event.reply:
         segments += list(event.reply.message)
-    urls = [seg.data.get("url") for seg in segments if seg.type == "image"]
-    return [u for u in urls if u][: cfg.vision_max_images]
+    urls = []
+    for seg in segments:
+        if seg.type != "image":
+            continue
+        # NapCat 一般放在 url 里；有的实现只在 file 里给 http 地址
+        url = seg.data.get("url") or seg.data.get("file") or ""
+        if url.startswith("http"):
+            urls.append(url)
+        else:
+            logger.warning(f"图片没有可下载的地址：{seg.data}")
+    return urls[: cfg.vision_max_images]
 
 
 def has_image(event: MessageEvent) -> bool:
@@ -155,8 +164,14 @@ async def load_images(event: MessageEvent) -> list[str]:
         try:
             images.append(await fetch_image(url, cfg.vision_max_bytes, cfg.request_timeout))
         except Exception:
-            logger.exception("下载图片失败")
+            logger.exception(f"下载图片失败：{url}")
     return images
+
+
+def mentions_image(event: MessageEvent) -> bool:
+    """本条或被引用的消息里有没有图片（不管能不能下载）。"""
+    segments = list(event.message) + (list(event.reply.message) if event.reply else [])
+    return any(seg.type == "image" for seg in segments)
 
 
 async def call_local(messages: list[dict], images: list[str]) -> str:
@@ -341,6 +356,8 @@ async def _(matcher: Matcher, event: MessageEvent):
     text = event.get_plaintext().strip()
     images = await load_images(event)
     if not text and not images:
+        if mentions_image(event):
+            await reply(matcher, event, "图片没加载出来，再发一次试试")
         await reply(matcher, event, HELP)
     try:
         answer = await ask(event, text or "你看看这个", use_flash=False, images=images)

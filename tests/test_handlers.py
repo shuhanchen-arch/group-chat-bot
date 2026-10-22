@@ -341,3 +341,24 @@ async def test_admin_image_interjection(vision):
     assert isinstance(calls[-1][1], list)
     assert "群友999【养鱼人】：[图片]" in calls[-1][1][0]["text"]
     assert "看到了" in sent[-1]
+
+
+async def test_image_download_failure_is_reported(vision, monkeypatch):
+    bot, sent, calls, _ = vision
+
+    async def broken_fetch(url, max_bytes, timeout):
+        raise RuntimeError("403")
+
+    monkeypatch.setattr(aichat, "fetch_image", broken_fetch)
+    await handle_event(bot, group_msg(Message(image_seg()), to_me=True))
+    assert calls == []
+    assert "图片没加载出来" in sent[-1]
+
+
+async def test_image_url_in_file_field(vision):
+    from nonebot.adapters.onebot.v11 import MessageSegment
+
+    bot, _, _, fetched = vision
+    seg = MessageSegment("image", {"file": "https://img/c.jpg"})
+    await handle_event(bot, group_msg(Message("看") + seg, to_me=True))
+    assert fetched == ["https://img/c.jpg"]
